@@ -1,0 +1,29 @@
+# constants and presets
+WIDTH = 1500
+HEIGHT = 1000
+BG = (30, 30, 30)
+GROUND_H_PX = 70
+
+# camera / zoom defaults
+DEFAULT_PPM = 50.0
+PPM_MIN = 8.0
+PPM_MAX = 1200.0
+
+# physics
+GRAVITY = 9.81
+SPRING_K = 120.0
+PROJECTILE_MASS = 0.5
+USE_PHYSICAL_LAUNCH = True
+
+RESTITUTION = 0.6
+BOUNCE_FRICTION = 0.9
+REST_SPEED_THRESHOLD = 0.6
+
+ENABLE_AIR_DRAG = False
+DRAG_COEFF = 0.1
+
+# visuals
+MARKER_R = 9
+BALL_RADIUS_M = 0.11
+
+FONT_NAME = "DejaVuSans"

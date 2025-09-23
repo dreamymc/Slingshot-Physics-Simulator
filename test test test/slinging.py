@@ -397,7 +397,7 @@ while running:
             projectile['bounces'] = projectile.get('bounces', 0) + 1
             speed_now = math.hypot(projectile['vx'], projectile['vy'])
             if speed_now < REST_SPEED_THRESHOLD:
-                projectile['alive'] = True
+                projectile['alive'] = False
                 prev_state = None
 
     # ---------------- Draw ----------------
@@ -506,16 +506,24 @@ while running:
             hover_index = i
 
     # hover tooltip shows recorded metrics; remove bounces at touch and rename impact -> Velocity
+ # ---------------- hover tooltip (replace existing hover tooltip code) ----------------
     if hover_index is not None:
         ld = landings[hover_index]
         sx, sy = ld['screen']
+
+        # GRID displacement = landing x coordinate in world meters (distance along grid from world origin)
+        grid_disp = ld.get('x', 0.0)
+
         txts = [
             f"Shot: {ld['shot_id']}",
             f"Range: {ld['range']:.2f} m",
+            f"Displacement: {grid_disp:.2f} m",               # <- grid displacement (no dx/dy)
             f"Velocity: {ld.get('velocity', ld.get('speed', 0.0)):.2f} m/s",
             f"Flight time: {ld.get('flight_time', 0.0):.2f} s" if ld.get('flight_time') is not None else "Flight time: -",
             f"Max height: {ld.get('max_height', 0.0):.2f} m"
         ]
+
+        # render tooltip (keeps your existing rendering code)
         padding = 6
         surfaces = [small.render(t, True, (220,220,220)) for t in txts]
         box_w = max(s.get_width() for s in surfaces) + padding*2
@@ -532,6 +540,7 @@ while running:
         for s in surfaces:
             screen.blit(s, (box_x + padding, oy))
             oy += s.get_height()
+
 
     # temporary hover prediction on anchor when idle (projectile is None)
     # show predicted final location and predicted bounce count based on last_pull (if available)

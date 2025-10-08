@@ -8,25 +8,30 @@ WIDTH, HEIGHT = 1500, 1000
 BG = (30, 30, 30)
 GROUND_H_PX = 70
 
+# world <-> screen scale (pixels per meter). This is what zoom will change.
 PIXELS_PER_M = 50.0
 PIXELS_PER_M_MIN = 8.0
 PIXELS_PER_M_MAX = 1200.0
 
 GRAVITY = 9.81
 
+# SPRING: base stiffness and a pull scale to reduce displayed force and launch energy
 SPRING_K_BASE = 70.0
-PULL_SCALE = 0.25
+PULL_SCALE = 0.25  # reduce perceived force and launch energy (0.25 = quarter strength)
 PROJECTILE_MASS = 0.5
 USE_PHYSICAL_LAUNCH = True
 
 RESTITUTION = 0.6
 BOUNCE_FRICTION = 0.9
-REST_SPEED_THRESHOLD = 0.12
+REST_SPEED_THRESHOLD = 0.12  # lower threshold so small bounces still occur
 
+# Air drag settings
 ENABLE_AIR_DRAG = False
+# legacy linear coefficient (kept as fallback)
 DRAG_COEFF_LINEAR = 0.1
-AIR_DENSITY = 1.225
-DRAG_COEFF_SPHERE = 0.47
+# Quadratic drag parameters (realistic)
+AIR_DENSITY = 1.225         # kg/m^3 (sea level)
+DRAG_COEFF_SPHERE = 0.47    # typical for smooth sphere
 
 MARKER_R = 9
 BALL_RADIUS_M = 0.11
@@ -34,13 +39,13 @@ BALL_RADIUS_M = 0.11
 # ---------------- Pygame init ----------------
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Slingshot — improved angle connect")
+pygame.display.set_caption("Slingshot — final (patched + quadratic drag + bounces preview)")
 clock = pygame.time.Clock()
 font = pygame.font.SysFont("DejaVuSans", 16)
 small = pygame.font.SysFont("DejaVuSans", 14)
 big = pygame.font.SysFont("DejaVuSans", 18, bold=True)
 
-# ---------------- Camera / Anchor ----------------
+# ---------------- Camera / Anchor (world coords) ----------------
 cam_off_x_m = 0.0
 cam_off_y_m = 0.0
 
@@ -54,6 +59,8 @@ def screen_to_world(sx, sy):
     wy = ((HEIGHT - GROUND_H_PX - sy) / PIXELS_PER_M) + cam_off_y_m
     return wx, wy
 
+INIT_ANCHOR_PX = (150, HEIGHT - GROUND_H_PX - 20)
+# user set anchor; ANCHOR_W is in meters (world coords)
 ANCHOR_W = (0.0, 2.0)
 if ANCHOR_W[1] < 0.0:
     ANCHOR_W = (ANCHOR_W[0], 0.0)
@@ -69,7 +76,6 @@ panning = False
 pan_start_mouse = (0, 0)
 pan_start_cam_x = 0.0
 mouse_pos = (0, 0)
-# last_pull stores (pwx, pwy, angle_deg)
 last_pull = None
 
 help_visible = False
@@ -118,9 +124,29 @@ COLOR_PRESETS = [
 def draw_text(x, y, s, f=font, color=(230,230,230)):
     screen.blit(f.render(s, True, color), (x, y))
 
+def predict_trajectory(x0, y0, vx0, vy0, steps=1000, dt=0.01):
+    # kept for compatibility, but not used for the realistic preview
+    pts = []
+    for i in range(steps):
+        t = i * dt
+        xt = x0 + vx0 * t
+        yt = y0 + vy0 * t - 0.5 * GRAVITY * t * t
+        pts.append((xt, yt))
+        if yt < -5.0:
+            break
+    return pts
+
 def record_landing_exact(prev, curr, anchor_x_m):
+    """
+    Interpolate between prev and curr states to find exact x at y==0.
+    prev and curr are dicts with keys 'x','y','vx','vy'.
+    Returns (x_l, impact_speed, range_from_anchor)
+    """
     y1 = prev['y']; y2 = curr['y']
-    frac = (0.0 - y1) / (y2 - y1) if (y2 - y1) != 0 else 0.0
+    if (y2 - y1) != 0:
+        frac = (0.0 - y1) / (y2 - y1)
+    else:
+        frac = 0.0
     frac = max(0.0, min(1.0, frac))
     x_l = prev['x'] + (curr['x'] - prev['x']) * frac
     vx_l = prev['vx'] + (curr['vx'] - prev['vx']) * frac
@@ -130,17 +156,24 @@ def record_landing_exact(prev, curr, anchor_x_m):
     return x_l, speed, rng
 
 def is_mouse_near(ptx, pty, sx, sy, r=MARKER_R+8):
+    """Return True if point (ptx,pty) is within radius r of screen point (sx,sy)."""
     return (ptx - sx)**2 + (pty - sy)**2 <= r*r
 
 def draw_grid(surface, meters_between_lines=1, label_every=5,
               line_color=(80,80,80), label_color=(180,180,180), alpha=60):
+    """Draw grid lines measured in world meters.
+       Horizontal lines start at y=0 (ground) and go upward only.
+    """
     grid_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
     col = (*line_color, alpha)
+
+    # World bounds in world coords (horizontal only; vertical anchored at y=0)
     world_x_left = cam_off_x_m
     world_x_right = cam_off_x_m + WIDTH / PIXELS_PER_M
     world_y_bottom = 0.0
     world_y_top = world_y_bottom + (HEIGHT - GROUND_H_PX) / PIXELS_PER_M
 
+    # Vertical lines
     x = math.floor(world_x_left / meters_between_lines) * meters_between_lines
     while x <= world_x_right:
         sx, _ = world_to_screen(x, 0)
@@ -150,6 +183,7 @@ def draw_grid(surface, meters_between_lines=1, label_every=5,
             grid_surf.blit(lbl, (sx+2, HEIGHT - GROUND_H_PX - 18))
         x += meters_between_lines
 
+    # Horizontal lines from ground (y=0) upward
     y = math.floor(world_y_bottom / meters_between_lines) * meters_between_lines
     while y <= world_y_top:
         _, sy = world_to_screen(0, y)
@@ -161,10 +195,14 @@ def draw_grid(surface, meters_between_lines=1, label_every=5,
 
     surface.blit(grid_surf, (0,0))
 
+# --- New: realistic simulation utilities matching runtime physics ---
+
 def compute_drag_accel(vx, vy):
+    """Return (axd, ayd) drag accelerations matching runtime usage."""
     v = math.hypot(vx, vy)
     if v <= 1e-12:
         return 0.0, 0.0
+    # area
     A = math.pi * (BALL_RADIUS_M ** 2)
     if ENABLE_AIR_DRAG:
         Fd = 0.5 * AIR_DENSITY * DRAG_COEFF_SPHERE * A * v * v
@@ -176,6 +214,9 @@ def compute_drag_accel(vx, vy):
     return axd, ayd
 
 def simulate_trajectory_points(x0, y0, vx0, vy0, dt_sim=0.02, max_time=20.0):
+    """Return list of (x,y) world points sampled every dt_sim until ground impact.
+       Uses same quadratic drag as runtime and same integrator.
+    """
     pts = []
     x, y = x0, y0
     vx, vy = vx0, vy0
@@ -194,7 +235,29 @@ def simulate_trajectory_points(x0, y0, vx0, vy0, dt_sim=0.02, max_time=20.0):
             break
     return pts
 
+def simulate_final_x_and_time(x0, y0, vx0, vy0, dt_sim=0.01, max_time=60.0):
+    """Simulate until first ground hit and return landing x and total time."""
+    x, y = x0, y0
+    vx, vy = vx0, vy0
+    t = 0.0
+    steps = int(max_time / dt_sim)
+    for _ in range(steps):
+        axd, ayd = compute_drag_accel(vx, vy)
+        ax = axd
+        ay = -GRAVITY + ayd
+        vx += ax * dt_sim
+        vy += ay * dt_sim
+        x += vx * dt_sim
+        y += vy * dt_sim
+        t += dt_sim
+        if y <= 0.0:
+            return x, t
+    return x, t
+
 def simulate_bounces_with_drag(x0, y0, vx0, vy0, restitution, friction, rest_speed, dt_sim=0.01, max_time=120.0):
+    """Simulate full motion including bounces until final rest (speed < rest_speed).
+       Returns final_x (world m), bounces_count, and total_sim_time.
+    """
     x, y = x0, y0
     vx, vy = vx0, vy0
     bounces = 0
@@ -210,6 +273,7 @@ def simulate_bounces_with_drag(x0, y0, vx0, vy0, restitution, friction, rest_spe
         y += vy * dt_sim
         t += dt_sim
         if y <= 0.0:
+            # collision: move to ground and reflect vertical component
             y = 0.0
             if abs(vy) > 1e-6:
                 bounces += 1
@@ -219,57 +283,6 @@ def simulate_bounces_with_drag(x0, y0, vx0, vy0, restitution, friction, rest_spe
             if speed < rest_speed:
                 break
     return x, bounces, t
-
-def angle_from_pull(pwx, pwy):
-    ang = (math.degrees(math.atan2(pwy, pwx)) + 360.0) % 360.0
-    return ang
-
-# draw angle arc that ends exactly at given screen end point (so it connects visually to trajectory)
-def draw_angle_arc_to_point(anchor_px, anchor_py, end_px, end_py, color=(220,180,80), width=3):
-    """
-    Sweep from 0° (to the right) up to the target angle in positive CCW order:
-    0 -> 90 -> 180 -> 270 -> ... This produces the desired top-right -> top-left
-    -> bottom-left -> bottom-right ordering as angle increases.
-    The arc is sampled and the final sample is replaced with the exact trajectory point
-    so it visually connects.
-    """
-    # vector from anchor to end, but invert screen Y for mathematical angle
-    dx = end_px - anchor_px
-    dy = anchor_py - end_py  # positive when end is above anchor
-    # target angle in degrees [0,360)
-    target_ang = (math.degrees(math.atan2(dy, dx)) + 360.0) % 360.0
-
-    # build sweep from 0 to target_ang (inclusive). If target_ang is very small (near 0)
-    # there will still be a short arc. Use a variable number of samples proportional to angle.
-    sweep_deg = target_ang
-    steps = max(6, int(min(72, 1 + sweep_deg * 0.12)))  # more steps for larger sweeps
-    pts = []
-    radius = 36
-    for i in range(steps):
-        t = i / (steps - 1)
-        ang_deg = t * sweep_deg
-        ang_rad = math.radians(ang_deg)
-        sx = anchor_px + math.cos(ang_rad) * radius
-        sy = anchor_py - math.sin(ang_rad) * radius
-        pts.append((int(sx), int(sy)))
-
-    # ensure final arc point exactly matches the trajectory connector
-    if pts:
-        pts[-1] = (int(end_px), int(end_py))
-
-    if len(pts) > 1:
-        pygame.draw.lines(screen, color, False, pts, width)
-        pygame.draw.circle(screen, color, pts[-1], 4)
-
-def quad_bezier(p0, p1, p2, steps=12):
-    pts = []
-    for i in range(steps + 1):
-        t = i / steps
-        u = 1 - t
-        x = u*u*p0[0] + 2*u*t*p1[0] + t*t*p2[0]
-        y = u*u*p0[1] + 2*u*t*p1[1] + t*t*p2[1]
-        pts.append((int(x), int(y)))
-    return pts
 
 # ---------------- Main loop ----------------
 running = True
@@ -410,9 +423,8 @@ while running:
                     pull_wx = pull_sx / PIXELS_PER_M
                     pull_wy = -pull_sy / PIXELS_PER_M
                     displacement_m = math.hypot(pull_wx, pull_wy)
-                    # compute angle and store with last_pull
-                    angle_deg = angle_from_pull(pull_wx, pull_wy)
-                    last_pull = (pull_wx, pull_wy, angle_deg)
+                    last_pull = (pull_wx, pull_wy)
+                    # effective spring constant after scaling
                     effective_k = SPRING_K_BASE * PULL_SCALE
                     if USE_PHYSICAL_LAUNCH and displacement_m > 1e-9:
                         v0 = displacement_m * math.sqrt(max(1e-12, effective_k / PROJECTILE_MASS))
@@ -430,8 +442,7 @@ while running:
                         "x": x0, "y": y0, "vx": vx0, "vy": vy0,
                         "alive": True, "shot_id": shot_id,
                         "start_time": time.time(), "first_touch_recorded": False,
-                        "max_height": y0, "bounces": 0,
-                        "launch_angle": angle_deg
+                        "max_height": y0, "bounces": 0
                     }
                     prev_state = None
 
@@ -458,6 +469,8 @@ while running:
     if projectile and projectile["alive"]:
         prev_state = {'x': projectile['x'], 'y': projectile['y'], 'vx': projectile['vx'], 'vy': projectile['vy']}
         vx = projectile['vx']; vy = projectile['vy']
+
+        # --- Quadratic drag (realistic) or fallback linear drag ---
         axd, ayd = compute_drag_accel(vx, vy)
         ax_tot = axd
         ay_tot = -GRAVITY + ayd
@@ -465,8 +478,10 @@ while running:
         projectile['vy'] += ay_tot * dt
         projectile['x'] += projectile['vx'] * dt
         projectile['y'] += projectile['vy'] * dt
+
         if projectile['y'] > projectile.get('max_height', -1e9):
             projectile['max_height'] = projectile['y']
+
         if projectile['y'] <= 0.0:
             if prev_state is not None:
                 x_l, speed, rng = record_landing_exact(prev_state, projectile, ANCHOR_W[0])
@@ -482,12 +497,12 @@ while running:
                     'flight_time': flight_time,
                     'range': rng,
                     'shot_id': projectile.get('shot_id'),
-                    'max_height': projectile.get('max_height', 0.0),
-                    'angle': projectile.get('launch_angle', 0.0)
+                    'max_height': projectile.get('max_height', 0.0)
                 }
                 landings.append(first_ld)
                 projectile['first_touch_recorded'] = True
             projectile['y'] = 0.0
+            # apply restitution to the vertical component
             projectile['vy'] = -projectile['vy'] * RESTITUTION
             projectile['vx'] = projectile['vx'] * BOUNCE_FRICTION
             projectile['bounces'] = projectile.get('bounces', 0) + 1
@@ -537,27 +552,20 @@ while running:
     draw_text(ax_s+12, ay_s-12, "Anchor height:", small)
     draw_text(ax_s+12, ay_s+6, f"{anchor_h:.2f} m", big)
 
-    # LAST pull info box (no angle when not dragging) -> show angle when available
     if last_pull is not None:
-        pwx, pwy, pang = last_pull
+        pwx, pwy = last_pull
         disp = math.hypot(pwx, pwy)
         effective_k = SPRING_K_BASE * PULL_SCALE
+        force_n = effective_k * disp
         if USE_PHYSICAL_LAUNCH and disp > 1e-9:
             v0 = disp * math.sqrt(max(1e-12, effective_k / PROJECTILE_MASS))
         else:
             v0 = disp * 4.0 * math.sqrt(PULL_SCALE)
         txt1 = f"Last pull: {disp:.3f} m"
         txt2 = f"Init speed: {v0:.2f} m/s"
-        txt3 = f"Force: {effective_k * disp:.1f} N"
+        txt3 = f"Force: {force_n:.1f} N"
         txt4 = f"Vec: ({pwx:.2f},{pwy:.2f}) m"
-        txt5 = f"Angle: {pang:.1f}°"
-        surfaces = [
-            small.render(txt1, True, (220,220,220)),
-            small.render(txt2, True, (220,220,220)),
-            small.render(txt3, True, (220,220,220)),
-            small.render(txt4, True, (220,220,220)),
-            small.render(txt5, True, (220,220,220)),
-        ]
+        surfaces = [small.render(txt1, True, (220,220,220)), small.render(txt2, True, (220,220,220)), small.render(txt3, True, (220,220,220)), small.render(txt4, True, (220,220,220))]
         box_w = max(s.get_width() for s in surfaces) + 12
         box_h = sum(s.get_height() for s in surfaces) + 12
         box_x = ax_s + 50
@@ -572,7 +580,6 @@ while running:
             oy += s.get_height()
 
     hud_y = 60
-    # DRAW angle indicator only while dragging (disappears after firing)
     if dragging:
         mx, my = mouse_pos
         pygame.draw.line(screen, (180,180,180), (ax_s, ay_s), (mx, my), 2)
@@ -592,47 +599,14 @@ while running:
         vy0 = uy * v0
         x0, y0 = ANCHOR_W
 
-        angle_deg = angle_from_pull(pull_wx, pull_wy)
-
-        # baseline horizontal line (0° reference) to the right (longer)
-        base_len = 120
-        pygame.draw.line(screen, (240,240,240), (ax_s - 4, ay_s), (ax_s + base_len, ay_s), 2)
-
-        # realistic preview points
+        # --- Realistic preview using same integrator and drag model ---
         pts = simulate_trajectory_points(x0, y0, vx0, vy0, dt_sim=0.02, max_time=20.0)
-        traj_screen = []
         for (xt, yt) in pts:
-            sx, sy = world_to_screen(xt, yt)
-            traj_screen.append((sx, sy))
-
-        # pick a trajectory point near the start to connect to (prefer first visible > anchor)
-        connector_target = None
-        for p in traj_screen[1:]:
-            if abs(p[0] - ax_s) > 2 or abs(p[1] - ay_s) > 2:
-                connector_target = p
-                break
-        if connector_target is None and traj_screen:
-            connector_target = traj_screen[-1]
-
-        if connector_target is not None:
-            end_px, end_py = connector_target
-            # draw arc that ends exactly at the trajectory broken-line point
-            draw_angle_arc_to_point(ax_s, ay_s, end_px, end_py, color=(220,180,80), width=3)
-
-        # numeric angle label placed to the right and slightly above arc
-        draw_text(ax_s + 28, ay_s - 44, f"Angle: {angle_deg:.1f}°", small)
-        # draw Force text near the angle label
-        draw_text(ax_s + 28, ay_s - 26, f"Force: {force_n:.1f} N", small)
-
-        # draw the trajectory preview dots
-        for i, (xt, yt) in enumerate(pts):
-            sx, sy = world_to_screen(xt, yt)
-            if i == 0:
-                continue
             if yt < 0:
                 sx, sy = world_to_screen(xt, 0.0)
                 pygame.draw.circle(screen, (180,200,80), (sx, sy), 6)
                 break
+            sx, sy = world_to_screen(xt, yt)
             if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
                 pygame.draw.circle(screen, (100,200,200), (sx, sy), 3)
 
@@ -642,7 +616,6 @@ while running:
     # always show gravity and Cd status
     draw_text(750, 15, f"Gravity: {GRAVITY:.2f} m/s²   Cd: {('on' if ENABLE_AIR_DRAG else 'off')}", small)
 
-    # projectile draw / HUD
     live_hud_y = 120
     if projectile and projectile['alive']:
         speed_now = math.hypot(projectile['vx'], projectile['vy'])
@@ -666,7 +639,6 @@ while running:
         else:
             pygame.draw.circle(screen, ball_color, (sx, sy), r_px)
 
-    # landings markers
     mx, my = mouse_pos
     hover_index = None
     for i, ld in enumerate(landings):
@@ -693,8 +665,7 @@ while running:
             f"Displacement: {grid_disp:.2f} m",
             f"Velocity: {ld.get('velocity', ld.get('speed', 0.0)):.2f} m/s",
             f"Flight time: {ld.get('flight_time', 0.0):.2f} s" if ld.get('flight_time') is not None else "Flight time: -",
-            f"Max height: {ld.get('max_height', 0.0):.2f} m",
-            f"Angle: {ld.get('angle', 0.0):.1f}°",
+            f"Max height: {ld.get('max_height', 0.0):.2f} m"
         ]
         padding = 6
         surfaces = [small.render(t, True, (220,220,220)) for t in txts]
@@ -713,13 +684,13 @@ while running:
             screen.blit(s, (box_x + padding, oy))
             oy += s.get_height()
 
-    # idle anchor prediction (no angle drawn)
+    # --- Idle anchor prediction: use the same physics including drag and bounces ---
     if projectile is None:
         ax_s, ay_s = world_to_screen(*ANCHOR_W)
         sx_anchor, sy_anchor = ax_s, ay_s
         if is_mouse_near(mx, my, sx_anchor, sy_anchor, r=26):
             if last_pull is not None:
-                pwx, pwy, pang = last_pull
+                pwx, pwy = last_pull
                 disp = math.hypot(pwx, pwy)
                 effective_k = SPRING_K_BASE * PULL_SCALE
                 if USE_PHYSICAL_LAUNCH and disp > 1e-9:
@@ -732,6 +703,7 @@ while running:
                 vy0 = uy * v0
                 x0, y0 = ANCHOR_W
 
+                # simulate bounces including drag
                 pred_final_x, pred_bounces, pred_time = simulate_bounces_with_drag(
                     x0, y0, vx0, vy0, RESTITUTION, BOUNCE_FRICTION, REST_SPEED_THRESHOLD, dt_sim=0.01, max_time=120.0
                 )
@@ -760,7 +732,6 @@ while running:
                 draw_text(box_x+6, box_y+6, txt1, small, color=(220,220,220))
                 draw_text(box_x+6, box_y+20, txt2, small, color=(220,220,220))
 
-    # modals and HUD
     if gravity_custom_modal:
         W, H = 360, 64
         x = (WIDTH - W)//2; y = (HEIGHT - H)//2
@@ -791,6 +762,7 @@ while running:
             pygame.draw.rect(screen, c, rect, border_radius=6)
             pygame.draw.rect(screen, (200,200,200), rect, 2, border_radius=6)
 
+    # Help modal (fixed: was not drawn previously)
     if help_visible:
         W, H = 540, 320
         x = (WIDTH - W)//2; y = (HEIGHT - H)//2

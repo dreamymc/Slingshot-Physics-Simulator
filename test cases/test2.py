@@ -34,7 +34,7 @@ BALL_RADIUS_M = 0.11
 # ---------------- Pygame init ----------------
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Slingshot — improved angle connect")
+pygame.display.set_caption("Slingshot — angle indicator")
 clock = pygame.time.Clock()
 font = pygame.font.SysFont("DejaVuSans", 16)
 small = pygame.font.SysFont("DejaVuSans", 14)
@@ -69,7 +69,6 @@ panning = False
 pan_start_mouse = (0, 0)
 pan_start_cam_x = 0.0
 mouse_pos = (0, 0)
-# last_pull stores (pwx, pwy, angle_deg)
 last_pull = None
 
 help_visible = False
@@ -224,43 +223,25 @@ def angle_from_pull(pwx, pwy):
     ang = (math.degrees(math.atan2(pwy, pwx)) + 360.0) % 360.0
     return ang
 
-# draw angle arc that ends exactly at given screen end point (so it connects visually to trajectory)
-def draw_angle_arc_to_point(anchor_px, anchor_py, end_px, end_py, color=(220,180,80), width=3):
-    """
-    Sweep from 0° (to the right) up to the target angle in positive CCW order:
-    0 -> 90 -> 180 -> 270 -> ... This produces the desired top-right -> top-left
-    -> bottom-left -> bottom-right ordering as angle increases.
-    The arc is sampled and the final sample is replaced with the exact trajectory point
-    so it visually connects.
-    """
-    # vector from anchor to end, but invert screen Y for mathematical angle
-    dx = end_px - anchor_px
-    dy = anchor_py - end_py  # positive when end is above anchor
-    # target angle in degrees [0,360)
-    target_ang = (math.degrees(math.atan2(dy, dx)) + 360.0) % 360.0
+# draw a small arc (as polyline) from 0° baseline to angle_deg around anchor
+def draw_angle_arc(anchor_px, anchor_py, angle_deg, radius_px=36, color=(220,180,80), width=3):
+    # choose sweep direction: go shortest path from 0 to angle_deg
+    a = angle_deg
+    if a > 180:
+        a -= 360.0
+    steps = max(6, int(abs(a) / 6) + 2)
+    points = []
+    for i in range(steps + 1):
+        t = i / steps
+        theta = math.radians(t * a)  # theta in world angle (0 -> a)
+        sx = anchor_px + math.cos(theta) * radius_px
+        sy = anchor_py - math.sin(theta) * radius_px
+        points.append((int(sx), int(sy)))
+    if len(points) > 1:
+        pygame.draw.lines(screen, color, False, points, width)
+        pygame.draw.circle(screen, color, points[-1], 4)
 
-    # build sweep from 0 to target_ang (inclusive). If target_ang is very small (near 0)
-    # there will still be a short arc. Use a variable number of samples proportional to angle.
-    sweep_deg = target_ang
-    steps = max(6, int(min(72, 1 + sweep_deg * 0.12)))  # more steps for larger sweeps
-    pts = []
-    radius = 36
-    for i in range(steps):
-        t = i / (steps - 1)
-        ang_deg = t * sweep_deg
-        ang_rad = math.radians(ang_deg)
-        sx = anchor_px + math.cos(ang_rad) * radius
-        sy = anchor_py - math.sin(ang_rad) * radius
-        pts.append((int(sx), int(sy)))
-
-    # ensure final arc point exactly matches the trajectory connector
-    if pts:
-        pts[-1] = (int(end_px), int(end_py))
-
-    if len(pts) > 1:
-        pygame.draw.lines(screen, color, False, pts, width)
-        pygame.draw.circle(screen, color, pts[-1], 4)
-
+# quadratic bezier helper (screen points)
 def quad_bezier(p0, p1, p2, steps=12):
     pts = []
     for i in range(steps + 1):
@@ -410,9 +391,7 @@ while running:
                     pull_wx = pull_sx / PIXELS_PER_M
                     pull_wy = -pull_sy / PIXELS_PER_M
                     displacement_m = math.hypot(pull_wx, pull_wy)
-                    # compute angle and store with last_pull
-                    angle_deg = angle_from_pull(pull_wx, pull_wy)
-                    last_pull = (pull_wx, pull_wy, angle_deg)
+                    last_pull = (pull_wx, pull_wy)
                     effective_k = SPRING_K_BASE * PULL_SCALE
                     if USE_PHYSICAL_LAUNCH and displacement_m > 1e-9:
                         v0 = displacement_m * math.sqrt(max(1e-12, effective_k / PROJECTILE_MASS))
@@ -430,8 +409,7 @@ while running:
                         "x": x0, "y": y0, "vx": vx0, "vy": vy0,
                         "alive": True, "shot_id": shot_id,
                         "start_time": time.time(), "first_touch_recorded": False,
-                        "max_height": y0, "bounces": 0,
-                        "launch_angle": angle_deg
+                        "max_height": y0, "bounces": 0
                     }
                     prev_state = None
 
@@ -482,8 +460,7 @@ while running:
                     'flight_time': flight_time,
                     'range': rng,
                     'shot_id': projectile.get('shot_id'),
-                    'max_height': projectile.get('max_height', 0.0),
-                    'angle': projectile.get('launch_angle', 0.0)
+                    'max_height': projectile.get('max_height', 0.0)
                 }
                 landings.append(first_ld)
                 projectile['first_touch_recorded'] = True
@@ -537,9 +514,9 @@ while running:
     draw_text(ax_s+12, ay_s-12, "Anchor height:", small)
     draw_text(ax_s+12, ay_s+6, f"{anchor_h:.2f} m", big)
 
-    # LAST pull info box (no angle when not dragging) -> show angle when available
+    # LAST pull info box (no angle when not dragging)
     if last_pull is not None:
-        pwx, pwy, pang = last_pull
+        pwx, pwy = last_pull
         disp = math.hypot(pwx, pwy)
         effective_k = SPRING_K_BASE * PULL_SCALE
         if USE_PHYSICAL_LAUNCH and disp > 1e-9:
@@ -550,14 +527,7 @@ while running:
         txt2 = f"Init speed: {v0:.2f} m/s"
         txt3 = f"Force: {effective_k * disp:.1f} N"
         txt4 = f"Vec: ({pwx:.2f},{pwy:.2f}) m"
-        txt5 = f"Angle: {pang:.1f}°"
-        surfaces = [
-            small.render(txt1, True, (220,220,220)),
-            small.render(txt2, True, (220,220,220)),
-            small.render(txt3, True, (220,220,220)),
-            small.render(txt4, True, (220,220,220)),
-            small.render(txt5, True, (220,220,220)),
-        ]
+        surfaces = [small.render(txt1, True, (220,220,220)), small.render(txt2, True, (220,220,220)), small.render(txt3, True, (220,220,220)), small.render(txt4, True, (220,220,220))]
         box_w = max(s.get_width() for s in surfaces) + 12
         box_h = sum(s.get_height() for s in surfaces) + 12
         box_x = ax_s + 50
@@ -594,45 +564,44 @@ while running:
 
         angle_deg = angle_from_pull(pull_wx, pull_wy)
 
-        # baseline horizontal line (0° reference) to the right (longer)
-        base_len = 120
+        # baseline horizontal line (0° reference) to the right
+        base_len = 72
         pygame.draw.line(screen, (240,240,240), (ax_s - 4, ay_s), (ax_s + base_len, ay_s), 2)
+
+        # arc between baseline and pull direction
+        draw_angle_arc(ax_s, ay_s, angle_deg, radius_px=36)
+
+        # connect arc end to trajectory with a curved connector
+        pts = simulate_trajectory_points(x0, y0, vx0, vy0, dt_sim=0.02, max_time=20.0)
+        if pts:
+            # first trajectory world pt -> screen
+            tx, ty = pts[0]
+            tpx, tpy = world_to_screen(tx, ty)
+            # compute arc end (same as draw_angle_arc last point)
+            # normalize angle to shortest signed angle
+            a = angle_deg
+            if a > 180:
+                a -= 360.0
+            theta = math.radians(a)
+            arc_end = (int(ax_s + math.cos(theta)*36), int(ay_s - math.sin(theta)*36))
+            # control point mid between arc_end and traj point, offset outward for curve
+            mid_x = (arc_end[0] + tpx)//2
+            mid_y = (arc_end[1] + tpy)//2 - 30  # lift control point for curvature
+            bez = quad_bezier(arc_end, (mid_x, mid_y), (tpx, tpy), steps=14)
+            if len(bez) > 1:
+                pygame.draw.lines(screen, (180,220,200), False, bez, 2)
+
+        # numeric angle label
+        draw_text(ax_s+12, ay_s-36, f"Angle: {angle_deg:.1f}°", small)
 
         # realistic preview points
         pts = simulate_trajectory_points(x0, y0, vx0, vy0, dt_sim=0.02, max_time=20.0)
-        traj_screen = []
         for (xt, yt) in pts:
-            sx, sy = world_to_screen(xt, yt)
-            traj_screen.append((sx, sy))
-
-        # pick a trajectory point near the start to connect to (prefer first visible > anchor)
-        connector_target = None
-        for p in traj_screen[1:]:
-            if abs(p[0] - ax_s) > 2 or abs(p[1] - ay_s) > 2:
-                connector_target = p
-                break
-        if connector_target is None and traj_screen:
-            connector_target = traj_screen[-1]
-
-        if connector_target is not None:
-            end_px, end_py = connector_target
-            # draw arc that ends exactly at the trajectory broken-line point
-            draw_angle_arc_to_point(ax_s, ay_s, end_px, end_py, color=(220,180,80), width=3)
-
-        # numeric angle label placed to the right and slightly above arc
-        draw_text(ax_s + 28, ay_s - 44, f"Angle: {angle_deg:.1f}°", small)
-        # draw Force text near the angle label
-        draw_text(ax_s + 28, ay_s - 26, f"Force: {force_n:.1f} N", small)
-
-        # draw the trajectory preview dots
-        for i, (xt, yt) in enumerate(pts):
-            sx, sy = world_to_screen(xt, yt)
-            if i == 0:
-                continue
             if yt < 0:
                 sx, sy = world_to_screen(xt, 0.0)
                 pygame.draw.circle(screen, (180,200,80), (sx, sy), 6)
                 break
+            sx, sy = world_to_screen(xt, yt)
             if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
                 pygame.draw.circle(screen, (100,200,200), (sx, sy), 3)
 
@@ -693,8 +662,7 @@ while running:
             f"Displacement: {grid_disp:.2f} m",
             f"Velocity: {ld.get('velocity', ld.get('speed', 0.0)):.2f} m/s",
             f"Flight time: {ld.get('flight_time', 0.0):.2f} s" if ld.get('flight_time') is not None else "Flight time: -",
-            f"Max height: {ld.get('max_height', 0.0):.2f} m",
-            f"Angle: {ld.get('angle', 0.0):.1f}°",
+            f"Max height: {ld.get('max_height', 0.0):.2f} m"
         ]
         padding = 6
         surfaces = [small.render(t, True, (220,220,220)) for t in txts]
@@ -713,13 +681,13 @@ while running:
             screen.blit(s, (box_x + padding, oy))
             oy += s.get_height()
 
-    # idle anchor prediction (no angle drawn)
+    # idle anchor prediction (shows only predicted stats, no angle)
     if projectile is None:
         ax_s, ay_s = world_to_screen(*ANCHOR_W)
         sx_anchor, sy_anchor = ax_s, ay_s
         if is_mouse_near(mx, my, sx_anchor, sy_anchor, r=26):
             if last_pull is not None:
-                pwx, pwy, pang = last_pull
+                pwx, pwy = last_pull
                 disp = math.hypot(pwx, pwy)
                 effective_k = SPRING_K_BASE * PULL_SCALE
                 if USE_PHYSICAL_LAUNCH and disp > 1e-9:

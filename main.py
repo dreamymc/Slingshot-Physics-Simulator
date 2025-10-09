@@ -226,13 +226,7 @@ def angle_from_pull(pwx, pwy):
 
 # draw angle arc that ends exactly at given screen end point (so it connects visually to trajectory)
 def draw_angle_arc_to_point(anchor_px, anchor_py, end_px, end_py, color=(220,180,80), width=3):
-    """
-    Sweep from 0° (to the right) up to the target angle in positive CCW order:
-    0 -> 90 -> 180 -> 270 -> ... This produces the desired top-right -> top-left
-    -> bottom-left -> bottom-right ordering as angle increases.
-    The arc is sampled and the final sample is replaced with the exact trajectory point
-    so it visually connects.
-    """
+
     # vector from anchor to end, but invert screen Y for mathematical angle
     dx = end_px - anchor_px
     dy = anchor_py - end_py  # positive when end is above anchor

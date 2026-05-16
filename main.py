@@ -6,7 +6,7 @@ import sys
 # ---------------- Config ----------------
 WIDTH, HEIGHT = 1500, 1000
 BG = (30, 30, 30)
-GROUND_H_PX = 70
+GROUND_H_PX = 250
 
 PIXELS_PER_M = 50.0
 PIXELS_PER_M_MIN = 8.0
@@ -72,6 +72,16 @@ mouse_pos = (0, 0)
 # last_pull stores (pwx, pwy, angle_deg)
 last_pull = None
 
+# Caching state
+cached_bounce_pred = None
+cached_bounce_params = None
+
+cached_traj_pred = None
+cached_traj_params = None
+
+cached_grid_surf = None
+cached_grid_params = None
+
 help_visible = False
 color_modal_visible = False
 gravity_custom_modal = False
@@ -120,7 +130,7 @@ def draw_text(x, y, s, f=font, color=(230,230,230)):
 
 def record_landing_exact(prev, curr, anchor_x_m):
     y1 = prev['y']; y2 = curr['y']
-    frac = (0.0 - y1) / (y2 - y1) if (y2 - y1) != 0 else 0.0
+    frac = (BALL_RADIUS_M - y1) / (y2 - y1) if (y2 - y1) != 0 else 0.0
     frac = max(0.0, min(1.0, frac))
     x_l = prev['x'] + (curr['x'] - prev['x']) * frac
     vx_l = prev['vx'] + (curr['vx'] - prev['vx']) * frac
@@ -134,6 +144,13 @@ def is_mouse_near(ptx, pty, sx, sy, r=MARKER_R+8):
 
 def draw_grid(surface, meters_between_lines=1, label_every=5,
               line_color=(80,80,80), label_color=(180,180,180), alpha=60):
+    global cached_grid_surf, cached_grid_params
+    
+    params = (cam_off_x_m, cam_off_y_m, PIXELS_PER_M, WIDTH, HEIGHT, meters_between_lines, label_every)
+    if cached_grid_surf is not None and cached_grid_params == params:
+        surface.blit(cached_grid_surf, (0,0))
+        return
+
     grid_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
     col = (*line_color, alpha)
     world_x_left = cam_off_x_m
@@ -159,6 +176,8 @@ def draw_grid(surface, meters_between_lines=1, label_every=5,
             grid_surf.blit(lbl, (4, sy-14))
         y += meters_between_lines
 
+    cached_grid_surf = grid_surf
+    cached_grid_params = params
     surface.blit(grid_surf, (0,0))
 
 def compute_drag_accel(vx, vy):
@@ -189,8 +208,8 @@ def simulate_trajectory_points(x0, y0, vx0, vy0, dt_sim=0.02, max_time=20.0):
         vy += ay * dt_sim
         x += vx * dt_sim
         y += vy * dt_sim
-        if y <= 0.0:
-            pts.append((x, 0.0))
+        if y <= BALL_RADIUS_M:
+            pts.append((x, BALL_RADIUS_M))
             break
     return pts
 
@@ -209,8 +228,8 @@ def simulate_bounces_with_drag(x0, y0, vx0, vy0, restitution, friction, rest_spe
         x += vx * dt_sim
         y += vy * dt_sim
         t += dt_sim
-        if y <= 0.0:
-            y = 0.0
+        if y <= BALL_RADIUS_M:
+            y = BALL_RADIUS_M
             if abs(vy) > 1e-6:
                 bounces += 1
             vy = -vy * restitution
@@ -287,6 +306,8 @@ while running:
                     ball_size_text = ""
             elif ev.key == pygame.K_c:
                 landings.clear()
+            elif ev.key == pygame.K_d:
+                ENABLE_AIR_DRAG = not ENABLE_AIR_DRAG
             elif ev.key == pygame.K_LEFTBRACKET or ev.unicode == "[":
                 RESTITUTION = max(0.0, RESTITUTION - 0.05)
             elif ev.key == pygame.K_RIGHTBRACKET or ev.unicode == "]":
@@ -324,75 +345,89 @@ while running:
 
         elif ev.type == pygame.MOUSEBUTTONDOWN:
             mx, my = ev.pos
-            if HELP_RECT.collidepoint(mx, my):
-                help_visible = not help_visible
-                continue
-            if COLOR_RECT.collidepoint(mx, my):
-                color_modal_visible = not color_modal_visible
-                continue
+            ui_handled = False
 
-            if BALL_MINUS_RECT.collidepoint(mx, my):
-                BALL_RADIUS_M = max(0.01, BALL_RADIUS_M - 0.01)
-                continue
-            if BALL_PLUS_RECT.collidepoint(mx, my):
-                BALL_RADIUS_M = BALL_RADIUS_M + 0.01
-                continue
-            if BALL_SIZE_RECT.collidepoint(mx, my):
-                ball_size_edit = True
-                ball_size_text = ""
-                continue
-
-            if color_modal_visible:
+            if help_visible:
+                if not HELP_RECT.collidepoint(mx, my):
+                    help_visible = False
+                ui_handled = True
+            elif color_modal_visible:
                 W, H = 420, 240
                 x = (WIDTH - W) // 2
                 y = (HEIGHT - H) // 2
-                ox = x + 18; oy = y + 52
-                for i, c in enumerate(COLOR_PRESETS):
-                    rect = pygame.Rect(ox + (i%6)*(36+12), oy + (i//6)*(36+12), 36, 36)
-                    if rect.collidepoint(mx, my):
-                        ball_color = c
-                        color_modal_visible = False
-                        break
-                grect = pygame.Rect(x+18, oy+90, 120, 28)
-                if grect.collidepoint(mx, my):
-                    ball_gradient = not ball_gradient
-                    color_modal_visible = False
-                    continue
                 modal_rect = pygame.Rect(x, y, W, H)
-                if not modal_rect.collidepoint(mx, my):
-                    color_modal_visible = False
-                    continue
-
-            for name, val, rect in preset_rects:
-                if rect.collidepoint(mx, my):
-                    if name == "Custom":
-                        gravity_custom_modal = True
-                        gravity_input_text = ""
-                    else:
-                        GRAVITY = val
-                    break
-
-            if ev.button == 1:
-                ax_s, ay_s = world_to_screen(*ANCHOR_W)
-                if (mx - ax_s)**2 + (my - ay_s)**2 < 14000:
-                    dragging = True
-                    mouse_pos = ev.pos
+                if modal_rect.collidepoint(mx, my):
+                    ox = x + 18; oy = y + 52
+                    for i, c in enumerate(COLOR_PRESETS):
+                        rect = pygame.Rect(ox + (i%6)*(36+12), oy + (i//6)*(36+12), 36, 36)
+                        if rect.collidepoint(mx, my):
+                            ball_color = c
+                            color_modal_visible = False
+                            break
+                    grect = pygame.Rect(x+18, oy+90, 120, 28)
+                    if grect.collidepoint(mx, my):
+                        ball_gradient = not ball_gradient
+                        color_modal_visible = False
                 else:
+                    color_modal_visible = False
+                ui_handled = True
+            elif gravity_custom_modal:
+                ui_handled = True
+            elif ball_size_edit:
+                ui_handled = True
+            
+            if not ui_handled:
+                if HELP_RECT.collidepoint(mx, my):
+                    help_visible = True
+                    ui_handled = True
+                elif COLOR_RECT.collidepoint(mx, my):
+                    color_modal_visible = True
+                    ui_handled = True
+                elif BALL_MINUS_RECT.collidepoint(mx, my):
+                    BALL_RADIUS_M = max(0.01, BALL_RADIUS_M - 0.01)
+                    ui_handled = True
+                elif BALL_PLUS_RECT.collidepoint(mx, my):
+                    BALL_RADIUS_M = BALL_RADIUS_M + 0.01
+                    ui_handled = True
+                elif BALL_SIZE_RECT.collidepoint(mx, my):
+                    ball_size_edit = True
+                    ball_size_text = ""
+                    ui_handled = True
+            
+            if not ui_handled:
+                for name, val, rect in preset_rects:
+                    if rect.collidepoint(mx, my):
+                        if name == "Custom":
+                            gravity_custom_modal = True
+                            gravity_input_text = ""
+                        else:
+                            GRAVITY = val
+                        ui_handled = True
+                        break
+
+            if not ui_handled:
+                if ev.button == 1:
+                    ax_s, ay_s = world_to_screen(*ANCHOR_W)
+                    if (mx - ax_s)**2 + (my - ay_s)**2 < 14000:
+                        dragging = True
+                        mouse_pos = ev.pos
+                    else:
+                        if my < HEIGHT - GROUND_H_PX - 6:
+                            new_anchor = screen_to_world(mx, my)
+                            if new_anchor[1] < 0.0:
+                                new_anchor = (new_anchor[0], 0.0)
+                            ANCHOR_W = new_anchor
+
+                elif ev.button == 3:
                     panning = True
                     pan_start_mouse = ev.pos
                     pan_start_cam_x = cam_off_x_m
 
-            elif ev.button == 3:
-                if my < HEIGHT - GROUND_H_PX - 6:
-                    new_anchor = screen_to_world(mx, my)
-                    if new_anchor[1] < 0.0:
-                        new_anchor = (new_anchor[0], 0.0)
-                    ANCHOR_W = new_anchor
-
         elif ev.type == pygame.MOUSEBUTTONUP:
-            if ev.button == 1:
+            if ev.button == 3:
                 if panning:
                     panning = False
+            elif ev.button == 1:
                 if dragging and (not help_visible and not color_modal_visible and not gravity_custom_modal):
                     dragging = False
                     SHOT_COUNTER += 1
@@ -461,7 +496,7 @@ while running:
         projectile['y'] += projectile['vy'] * dt
         if projectile['y'] > projectile.get('max_height', -1e9):
             projectile['max_height'] = projectile['y']
-        if projectile['y'] <= 0.0:
+        if projectile['y'] <= BALL_RADIUS_M:
             if prev_state is not None:
                 x_l, speed, rng = record_landing_exact(prev_state, projectile, ANCHOR_W[0])
             else:
@@ -471,7 +506,7 @@ while running:
                 flight_time = time.time() - projectile.get('start_time', time.time())
                 first_ld = {
                     'x': x_l,
-                    'y': 0.0,
+                    'y': BALL_RADIUS_M,
                     'velocity': impact_speed,
                     'flight_time': flight_time,
                     'range': rng,
@@ -481,7 +516,7 @@ while running:
                 }
                 landings.append(first_ld)
                 projectile['first_touch_recorded'] = True
-            projectile['y'] = 0.0
+            projectile['y'] = BALL_RADIUS_M
             projectile['vy'] = -projectile['vy'] * RESTITUTION
             projectile['vx'] = projectile['vx'] * BOUNCE_FRICTION
             projectile['bounces'] = projectile.get('bounces', 0) + 1
@@ -593,7 +628,12 @@ while running:
         pygame.draw.line(screen, (240,240,240), (ax_s - 4, ay_s), (ax_s + base_len, ay_s), 2)
 
         # realistic preview points
-        pts = simulate_trajectory_points(x0, y0, vx0, vy0, dt_sim=0.02, max_time=20.0)
+        traj_params = (x0, y0, vx0, vy0, GRAVITY, ENABLE_AIR_DRAG, BALL_RADIUS_M)
+        if cached_traj_params != traj_params:
+            cached_traj_pred = simulate_trajectory_points(x0, y0, vx0, vy0, dt_sim=0.02, max_time=20.0)
+            cached_traj_params = traj_params
+        pts = cached_traj_pred
+        
         traj_screen = []
         for (xt, yt) in pts:
             sx, sy = world_to_screen(xt, yt)
@@ -623,8 +663,8 @@ while running:
             sx, sy = world_to_screen(xt, yt)
             if i == 0:
                 continue
-            if yt < 0:
-                sx, sy = world_to_screen(xt, 0.0)
+            if yt <= BALL_RADIUS_M + 1e-4:
+                sx, sy = world_to_screen(xt, BALL_RADIUS_M)
                 pygame.draw.circle(screen, (180,200,80), (sx, sy), 6)
                 break
             if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
@@ -726,9 +766,13 @@ while running:
                 vy0 = uy * v0
                 x0, y0 = ANCHOR_W
 
-                pred_final_x, pred_bounces, pred_time = simulate_bounces_with_drag(
-                    x0, y0, vx0, vy0, RESTITUTION, BOUNCE_FRICTION, REST_SPEED_THRESHOLD, dt_sim=0.01, max_time=120.0
-                )
+                pred_params = (x0, y0, vx0, vy0, RESTITUTION, BOUNCE_FRICTION, GRAVITY, ENABLE_AIR_DRAG, BALL_RADIUS_M)
+                if cached_bounce_params != pred_params:
+                    cached_bounce_pred = simulate_bounces_with_drag(
+                        x0, y0, vx0, vy0, RESTITUTION, BOUNCE_FRICTION, REST_SPEED_THRESHOLD, dt_sim=0.01, max_time=120.0
+                    )
+                    cached_bounce_params = pred_params
+                pred_final_x, pred_bounces, pred_time = cached_bounce_pred
                 pred_range = pred_final_x - x0
                 txt1 = f"Predicted bounces: {pred_bounces}"
                 txt2 = f"Predicted final X: {pred_final_x:.2f} m ({pred_range:.2f} m from anchor)"
@@ -793,13 +837,14 @@ while running:
         lines = [
             "Controls:",
             "- Left click + drag on anchor: pull and release to shoot.",
-            "- Right click: move anchor (clamped to ground).",
-            "- Drag outside anchor: pan camera horizontally.",
+            "- Left click outside anchor: move anchor (clamped to ground).",
+            "- Right click + drag: pan camera horizontally.",
             "- Mouse wheel: zoom (centered on mouse).",
             "- [ and ]: decrease / increase restitution (bounciness).",
             "- C: clear recorded landings.",
+            "- D: toggle air drag.",
             "Toggles:",
-            f"- Air drag (Cd): {'on' if ENABLE_AIR_DRAG else 'off'} (variable ENABLE_AIR_DRAG).",
+            f"- Air drag (Cd): {'on' if ENABLE_AIR_DRAG else 'off'} (toggle with D).",
             "Notes:",
             "- Force shown is k * displacement. Use PULL_SCALE to reduce strength.",
             "- Restitution reduces vertical velocity on bounce; lower values make bounces smaller.",

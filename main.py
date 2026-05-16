@@ -40,6 +40,23 @@ font = pygame.font.SysFont("DejaVuSans", 16)
 small = pygame.font.SysFont("DejaVuSans", 14)
 big = pygame.font.SysFont("DejaVuSans", 18, bold=True)
 
+# ---------------- Assets ----------------
+import os
+def load_image(name, colorkey=None):
+    try:
+        img = pygame.image.load(os.path.join("assets", name)).convert_alpha()
+        if colorkey is not None:
+            img.set_colorkey(colorkey)
+        return img
+    except Exception as e:
+        print(f"Failed to load {name}: {e}")
+        return pygame.Surface((32, 32))
+
+bg_img = load_image("bg_sky.png")
+ground_img = load_image("ground.png")
+cannonball_img = load_image("cannonball.png", (0, 0, 0))
+slingshot_img = load_image("slingshot.png", (0, 0, 0))
+
 # ---------------- Camera / Anchor ----------------
 cam_off_x_m = 0.0
 cam_off_y_m = 0.0
@@ -82,47 +99,43 @@ cached_traj_params = None
 cached_grid_surf = None
 cached_grid_params = None
 
-help_visible = False
-color_modal_visible = False
-gravity_custom_modal = False
-gravity_input_text = ""
+settings_menu_open = False
+draw_grid_enabled = False
 
-ball_color = (200, 80, 80)
-ball_gradient = False
-
-ball_size_edit = False
-ball_size_text = ""
-
-BALL_MINUS_RECT = pygame.Rect(WIDTH - 320, 12, 36, 34)
-BALL_SIZE_RECT = pygame.Rect(WIDTH - 280, 12, 120, 34)
-BALL_PLUS_RECT = pygame.Rect(WIDTH - 156, 12, 36, 34)
+GEAR_RECT = pygame.Rect(WIDTH - 50, 10, 40, 40)
+MENU_W, MENU_H = 600, 400
+MENU_X = (WIDTH - MENU_W) // 2
+MENU_Y = (HEIGHT - MENU_H) // 2
+MENU_RECT = pygame.Rect(MENU_X, MENU_Y, MENU_W, MENU_H)
 
 GRAV_PRESETS = [
-    ("Earth", 9.81),
-    ("Moon", 1.62),
-    ("Mars", 3.71),
-    ("Jupiter", 24.79),
-    ("Custom", None)
+    ("Earth", 9.81), ("Moon", 1.62), ("Mars", 3.71),
+    ("Jupiter", 24.79), ("Custom", None)
 ]
 preset_rects = []
-px = 12
+px = MENU_X + 20
 for name, val in GRAV_PRESETS:
-    preset_rects.append((name, val, pygame.Rect(px, 12, 86, 30)))
+    preset_rects.append((name, val, pygame.Rect(px, MENU_Y + 60, 86, 30)))
     px += 92
-REST_BOX = pygame.Rect(px + 20, 12, 240, 30)
 
-HELP_RECT = pygame.Rect(WIDTH - 120, 56, 100, 34)
-COLOR_RECT = pygame.Rect(WIDTH - 120, 12, 100, 34)
+REST_BOX = pygame.Rect(MENU_X + 20, MENU_Y + 110, 240, 30)
+BALL_MINUS_RECT = pygame.Rect(MENU_X + 20, MENU_Y + 160, 36, 34)
+BALL_SIZE_RECT = pygame.Rect(MENU_X + 60, MENU_Y + 160, 120, 34)
+BALL_PLUS_RECT = pygame.Rect(MENU_X + 184, MENU_Y + 160, 36, 34)
 
-COLOR_PRESETS = [
-    (200, 80, 80),
-    (80, 200, 120),
-    (80, 160, 220),
-    (220, 180, 60),
-    (200, 100, 200),
-    (230, 230, 230),
-    (30, 144, 255)
-]
+CLEAR_SHOTS_RECT = pygame.Rect(MENU_X + 20, MENU_Y + 210, 180, 34)
+TOGGLE_DRAG_RECT = pygame.Rect(MENU_X + 220, MENU_Y + 210, 180, 34)
+TOGGLE_GRID_RECT = pygame.Rect(MENU_X + 20, MENU_Y + 260, 180, 34)
+
+gravity_custom_modal = False
+gravity_input_text = ""
+ball_size_edit = False
+ball_size_text = ""
+help_visible = False
+color_modal_visible = False
+ball_color = (40, 40, 40)
+ball_gradient = False
+COLOR_PRESETS = []
 
 # ---------------- Utilities ----------------
 def draw_text(x, y, s, f=font, color=(230,230,230)):
@@ -294,16 +307,16 @@ while running:
             running = False
         elif ev.type == pygame.KEYDOWN:
             if ev.key == pygame.K_ESCAPE:
-                if help_visible:
-                    help_visible = False
-                elif color_modal_visible:
-                    color_modal_visible = False
+                if settings_menu_open:
+                    settings_menu_open = False
                 elif gravity_custom_modal:
                     gravity_custom_modal = False
                     gravity_input_text = ""
                 elif ball_size_edit:
                     ball_size_edit = False
                     ball_size_text = ""
+            elif ev.key == pygame.K_g:
+                draw_grid_enabled = not draw_grid_enabled
             elif ev.key == pygame.K_c:
                 landings.clear()
             elif ev.key == pygame.K_d:
@@ -347,63 +360,46 @@ while running:
             mx, my = ev.pos
             ui_handled = False
 
-            if help_visible:
-                if not HELP_RECT.collidepoint(mx, my):
-                    help_visible = False
-                ui_handled = True
-            elif color_modal_visible:
-                W, H = 420, 240
-                x = (WIDTH - W) // 2
-                y = (HEIGHT - H) // 2
-                modal_rect = pygame.Rect(x, y, W, H)
-                if modal_rect.collidepoint(mx, my):
-                    ox = x + 18; oy = y + 52
-                    for i, c in enumerate(COLOR_PRESETS):
-                        rect = pygame.Rect(ox + (i%6)*(36+12), oy + (i//6)*(36+12), 36, 36)
-                        if rect.collidepoint(mx, my):
-                            ball_color = c
-                            color_modal_visible = False
-                            break
-                    grect = pygame.Rect(x+18, oy+90, 120, 28)
-                    if grect.collidepoint(mx, my):
-                        ball_gradient = not ball_gradient
-                        color_modal_visible = False
+            if settings_menu_open:
+                if gravity_custom_modal:
+                    ui_handled = True
+                elif ball_size_edit:
+                    ui_handled = True
+                elif not MENU_RECT.collidepoint(mx, my) and not GEAR_RECT.collidepoint(mx, my):
+                    settings_menu_open = False
+                    ui_handled = True
+                elif GEAR_RECT.collidepoint(mx, my):
+                    settings_menu_open = False
+                    ui_handled = True
                 else:
-                    color_modal_visible = False
-                ui_handled = True
-            elif gravity_custom_modal:
-                ui_handled = True
-            elif ball_size_edit:
-                ui_handled = True
-            
-            if not ui_handled:
-                if HELP_RECT.collidepoint(mx, my):
-                    help_visible = True
                     ui_handled = True
-                elif COLOR_RECT.collidepoint(mx, my):
-                    color_modal_visible = True
+                    if CLEAR_SHOTS_RECT.collidepoint(mx, my):
+                        landings.clear()
+                    elif TOGGLE_DRAG_RECT.collidepoint(mx, my):
+                        ENABLE_AIR_DRAG = not ENABLE_AIR_DRAG
+                    elif TOGGLE_GRID_RECT.collidepoint(mx, my):
+                        draw_grid_enabled = not draw_grid_enabled
+                    elif BALL_MINUS_RECT.collidepoint(mx, my):
+                        BALL_RADIUS_M = max(0.01, BALL_RADIUS_M - 0.01)
+                    elif BALL_PLUS_RECT.collidepoint(mx, my):
+                        BALL_RADIUS_M = BALL_RADIUS_M + 0.01
+                    elif BALL_SIZE_RECT.collidepoint(mx, my):
+                        ball_size_edit = True
+                        ball_size_text = ""
+                    else:
+                        for name, val, rect in preset_rects:
+                            if rect.collidepoint(mx, my):
+                                if name == "Custom":
+                                    gravity_custom_modal = True
+                                    gravity_input_text = ""
+                                else:
+                                    GRAVITY = val
+                                break
+
+            else:
+                if GEAR_RECT.collidepoint(mx, my):
+                    settings_menu_open = True
                     ui_handled = True
-                elif BALL_MINUS_RECT.collidepoint(mx, my):
-                    BALL_RADIUS_M = max(0.01, BALL_RADIUS_M - 0.01)
-                    ui_handled = True
-                elif BALL_PLUS_RECT.collidepoint(mx, my):
-                    BALL_RADIUS_M = BALL_RADIUS_M + 0.01
-                    ui_handled = True
-                elif BALL_SIZE_RECT.collidepoint(mx, my):
-                    ball_size_edit = True
-                    ball_size_text = ""
-                    ui_handled = True
-            
-            if not ui_handled:
-                for name, val, rect in preset_rects:
-                    if rect.collidepoint(mx, my):
-                        if name == "Custom":
-                            gravity_custom_modal = True
-                            gravity_input_text = ""
-                        else:
-                            GRAVITY = val
-                        ui_handled = True
-                        break
 
             if not ui_handled:
                 if ev.button == 1:
@@ -428,7 +424,7 @@ while running:
                 if panning:
                     panning = False
             elif ev.button == 1:
-                if dragging and (not help_visible and not color_modal_visible and not gravity_custom_modal):
+                if dragging and not settings_menu_open:
                     dragging = False
                     SHOT_COUNTER += 1
                     shot_id = SHOT_COUNTER
@@ -526,45 +522,87 @@ while running:
                 prev_state = None
 
     # ---------------- Draw ----------------
-    screen.fill(BG)
-    draw_grid(screen, meters_between_lines=1, label_every=5, alpha=60)
+    if bg_img.get_width() > 32:
+        bg_w = bg_img.get_width()
+        bg_h = bg_img.get_height()
+        scale_factor = HEIGHT / bg_h
+        scaled_bg_w = int(bg_w * scale_factor)
+        scaled_bg = pygame.transform.scale(bg_img, (scaled_bg_w, HEIGHT))
+        para_x = int(-cam_off_x_m * PIXELS_PER_M * 0.2) % scaled_bg_w
+        screen.blit(scaled_bg, (para_x, 0))
+        if para_x > 0:
+            screen.blit(scaled_bg, (para_x - scaled_bg_w, 0))
+        if para_x + scaled_bg_w < WIDTH:
+            screen.blit(scaled_bg, (para_x + scaled_bg_w, 0))
+    else:
+        screen.fill(BG)
+        
+    if draw_grid_enabled:
+        draw_grid(screen, meters_between_lines=1, label_every=5, alpha=60)
 
     ground_y_px = HEIGHT - GROUND_H_PX
-    pygame.draw.line(screen, (180,180,180), (0, ground_y_px), (WIDTH, ground_y_px), 3)
-    pygame.draw.rect(screen, (50,50,50), (0, ground_y_px, WIDTH, GROUND_H_PX))
+    if ground_img.get_width() > 32:
+        gr_w = ground_img.get_width()
+        gr_h = ground_img.get_height()
+        scale_factor = GROUND_H_PX / gr_h
+        scaled_gr_w = int(gr_w * scale_factor)
+        scaled_gr = pygame.transform.scale(ground_img, (scaled_gr_w, GROUND_H_PX))
+        gx_off = int(-cam_off_x_m * PIXELS_PER_M) % scaled_gr_w
+        if gx_off > 0:
+            gx_off -= scaled_gr_w
+        curr_x = gx_off
+        while curr_x < WIDTH:
+            screen.blit(scaled_gr, (curr_x, ground_y_px))
+            curr_x += scaled_gr_w
+    else:
+        pygame.draw.line(screen, (180,180,180), (0, ground_y_px), (WIDTH, ground_y_px), 3)
+        pygame.draw.rect(screen, (50,50,50), (0, ground_y_px, WIDTH, GROUND_H_PX))
 
-    for name, val, rect in preset_rects:
-        pygame.draw.rect(screen, (80,80,80), rect, border_radius=6)
-        screen.blit(small.render(name, True, (220,220,220)), (rect.x+8, rect.y+6))
-        if val is not None and abs(GRAVITY - val) < 1e-4:
-            pygame.draw.rect(screen, (120,180,120), rect, 3, border_radius=6)
-        elif name == "Custom" and (not any(abs(GRAVITY - v) < 1e-4 for (_, v, _) in preset_rects if v is not None)):
-            pygame.draw.rect(screen, (120,180,120), rect, 3, border_radius=6)
-
-    pygame.draw.rect(screen, (70,70,70), REST_BOX, border_radius=6)
-    draw_text(REST_BOX.x+8, REST_BOX.y+6, f"Restitution: {RESTITUTION:.2f}  ([ / ]) to change", small)
-
-    pygame.draw.rect(screen, (100,100,100), BALL_MINUS_RECT, border_radius=6)
-    pygame.draw.rect(screen, (100,100,100), BALL_PLUS_RECT, border_radius=6)
-    pygame.draw.rect(screen, (60,60,60), BALL_SIZE_RECT, border_radius=6)
-    screen.blit(big.render("-", True, (220,220,220)), (BALL_MINUS_RECT.x+10, BALL_MINUS_RECT.y+6))
-    screen.blit(big.render("+", True, (220,220,220)), (BALL_PLUS_RECT.x+6, BALL_PLUS_RECT.y+6))
-    screen.blit(small.render(f"Ball r: {BALL_RADIUS_M:.3f} m", True, (220,220,220)), (BALL_SIZE_RECT.x+8, BALL_SIZE_RECT.y+8))
-
-    pygame.draw.rect(screen, (220,220,220), HELP_RECT, border_radius=6)
-    pygame.draw.rect(screen, (30,30,30), (HELP_RECT.x+2, HELP_RECT.y+2, HELP_RECT.w-4, HELP_RECT.h-4), border_radius=6)
-    screen.blit(font.render("Help", True, (230,230,230)), (HELP_RECT.x+30, HELP_RECT.y+8))
-    pygame.draw.rect(screen, (220,220,220), COLOR_RECT, border_radius=6)
-    pygame.draw.rect(screen, (30,30,30), (COLOR_RECT.x+2, COLOR_RECT.y+2, COLOR_RECT.w-4, COLOR_RECT.h-4), border_radius=6)
-    screen.blit(font.render("Color", True, (230,230,230)), (COLOR_RECT.x+30, COLOR_RECT.y+8))
+    # UI overlay is drawn later, so we just draw the slingshot layers here.
 
     ax_s, ay_s = world_to_screen(*ANCHOR_W)
-    pygame.draw.circle(screen, (200,160,60), (ax_s, ay_s), 9)
     anchor_h = ANCHOR_W[1]
-    pygame.draw.line(screen, (140,140,220), (ax_s, ay_s), (ax_s, ground_y_px), 2)
-    pygame.draw.polygon(screen, (140,140,220), [(ax_s-6, ground_y_px+6), (ax_s+6, ground_y_px+6), (ax_s, ground_y_px-2)])
-    draw_text(ax_s+12, ay_s-12, "Anchor height:", small)
-    draw_text(ax_s+12, ay_s+6, f"{anchor_h:.2f} m", big)
+
+    sh_h, sh_w = 0, 0
+    left_prong, right_prong = (ax_s, ay_s), (ax_s, ay_s)
+    if slingshot_img.get_width() > 32:
+        sh_h = max(10, ground_y_px - ay_s + 20)
+        sh_w = int(slingshot_img.get_width() * (sh_h / slingshot_img.get_height()))
+        scaled_sh = pygame.transform.scale(slingshot_img, (sh_w, sh_h))
+        # Estimate prong locations based on image
+        left_prong = (ax_s - int(sh_w * 0.25), ay_s - 10)
+        right_prong = (ax_s + int(sh_w * 0.25), ay_s - 10)
+
+    # 1. Back rubber band (Right prong to mouse/projectile)
+    if dragging:
+        mx, my = mouse_pos
+        pygame.draw.line(screen, (40, 20, 10), right_prong, (mx, my), 5)
+    
+    # 2. Draw projectile while dragging (before shooting)
+    if dragging:
+        mx, my = mouse_pos
+        r_px = max(2, int(BALL_RADIUS_M * PIXELS_PER_M))
+        if cannonball_img.get_width() > 32:
+            scaled_cb = pygame.transform.scale(cannonball_img, (r_px * 2, r_px * 2))
+            screen.blit(scaled_cb, (mx - r_px, my - r_px))
+        else:
+            pygame.draw.circle(screen, (40,40,40), (mx, my), r_px)
+        
+        # Pouch
+        pygame.draw.rect(screen, (50, 25, 10), (mx - 5, my - 8, 10, 16), border_radius=3)
+
+    # 3. Front rubber band (Left prong to mouse/projectile)
+    if dragging:
+        mx, my = mouse_pos
+        pygame.draw.line(screen, (60, 30, 15), left_prong, (mx, my), 6)
+
+    # 4. Slingshot Base
+    if slingshot_img.get_width() > 32:
+        screen.blit(scaled_sh, (ax_s - sh_w // 2, ay_s - 10))
+    else:
+        pygame.draw.circle(screen, (200,160,60), (ax_s, ay_s), 9)
+        pygame.draw.line(screen, (140,140,220), (ax_s, ay_s), (ax_s, ground_y_px), 2)
+        pygame.draw.polygon(screen, (140,140,220), [(ax_s-6, ground_y_px+6), (ax_s+6, ground_y_px+6), (ax_s, ground_y_px-2)])
 
     # LAST pull info box (no angle when not dragging) -> show angle when available
     if last_pull is not None:
@@ -604,7 +642,6 @@ while running:
     # DRAW angle indicator only while dragging (disappears after firing)
     if dragging:
         mx, my = mouse_pos
-        pygame.draw.line(screen, (180,180,180), (ax_s, ay_s), (mx, my), 2)
         pull_sx = ax_s - mx
         pull_sy = ay_s - my
         pull_wx = pull_sx / PIXELS_PER_M
@@ -658,23 +695,23 @@ while running:
         # draw Force text near the angle label
         draw_text(ax_s + 28, ay_s - 26, f"Force: {force_n:.1f} N", small)
 
-        # draw the trajectory preview dots
+        # draw the trajectory preview dots (fade out)
         for i, (xt, yt) in enumerate(pts):
             sx, sy = world_to_screen(xt, yt)
             if i == 0:
                 continue
             if yt <= BALL_RADIUS_M + 1e-4:
                 sx, sy = world_to_screen(xt, BALL_RADIUS_M)
-                pygame.draw.circle(screen, (180,200,80), (sx, sy), 6)
+                pygame.draw.circle(screen, (40, 40, 40), (sx, sy), 4)
                 break
             if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
-                pygame.draw.circle(screen, (100,200,200), (sx, sy), 3)
+                if i % 2 == 0: # only draw every other point for classic dotted look
+                    alpha = max(50, 255 - i * 5)
+                    s_tmp = pygame.Surface((6, 6), pygame.SRCALPHA)
+                    pygame.draw.circle(s_tmp, (40, 40, 40, alpha), (3, 3), 3)
+                    screen.blit(s_tmp, (sx - 3, sy - 3))
 
-        draw_text(10, hud_y, f"Disp: {disp:.3f} m   Force: {force_n:.1f} N   Init speed: {v0:.2f} m/s", small)
-        draw_text(10, hud_y + 18, f"Gravity: {GRAVITY:.2f} m/s²   Cd: {('on' if ENABLE_AIR_DRAG else 'off')}", small)
-
-    # always show gravity and Cd status
-    draw_text(750, 15, f"Gravity: {GRAVITY:.2f} m/s²   Cd: {('on' if ENABLE_AIR_DRAG else 'off')}", small)
+    # We do not draw floating text hud here anymore, moving to settings menu
 
     # projectile draw / HUD
     live_hud_y = 120
@@ -691,22 +728,30 @@ while running:
         r_px = int(BALL_RADIUS_M * PIXELS_PER_M)
         if r_px < 2:
             r_px = 2
-        if ball_gradient:
-            steps = max(6, r_px//2)
-            for i in range(steps, 0, -1):
-                frac = i/steps
-                c = (int(ball_color[0]*frac + 20*(1-frac)), int(ball_color[1]*frac + 20*(1-frac)), int(ball_color[2]*frac + 20*(1-frac)))
-                pygame.draw.circle(screen, c, (sx, sy), int(r_px*frac))
+        if cannonball_img.get_width() > 32:
+            scaled_cb = pygame.transform.scale(cannonball_img, (r_px * 2, r_px * 2))
+            screen.blit(scaled_cb, (sx - r_px, sy - r_px))
         else:
-            pygame.draw.circle(screen, ball_color, (sx, sy), r_px)
+            if ball_gradient:
+                steps = max(6, r_px//2)
+                for i in range(steps, 0, -1):
+                    frac = i/steps
+                    c = (int(ball_color[0]*frac + 20*(1-frac)), int(ball_color[1]*frac + 20*(1-frac)), int(ball_color[2]*frac + 20*(1-frac)))
+                    pygame.draw.circle(screen, c, (sx, sy), int(r_px*frac))
+            else:
+                pygame.draw.circle(screen, ball_color, (sx, sy), r_px)
 
     # landings markers
     mx, my = mouse_pos
     hover_index = None
     for i, ld in enumerate(landings):
         sx, sy = world_to_screen(ld['x'], ld.get('y', 0.0))
-        pygame.draw.circle(screen, (80,200,120), (sx, sy), MARKER_R)
-        pygame.draw.line(screen, (120,220,150), (sx, sy), (sx, sy-36), 2)
+        # Draw a little crater
+        crater_rect = pygame.Rect(sx - 10, sy - 4, 20, 8)
+        pygame.draw.ellipse(screen, (30, 20, 10), crater_rect)
+        pygame.draw.ellipse(screen, (10, 5, 0), (sx - 6, sy - 2, 12, 4))
+        # Draw a tiny wooden peg
+        pygame.draw.rect(screen, (139, 69, 19), (sx - 2, sy - 15, 4, 15))
         label = f"{ld['range']:.2f} m  [{ld['shot_id']}]"
         txt = small.render(label, True, (200,200,200))
         tx = sx + 12
@@ -798,63 +843,73 @@ while running:
                 draw_text(box_x+6, box_y+6, txt1, small, color=(220,220,220))
                 draw_text(box_x+6, box_y+20, txt2, small, color=(220,220,220))
 
-    # modals and HUD
-    if gravity_custom_modal:
-        W, H = 360, 64
-        x = (WIDTH - W)//2; y = (HEIGHT - H)//2
-        pygame.draw.rect(screen, (230,230,230), (x-4, y-4, W+8, H+8), border_radius=8)
-        pygame.draw.rect(screen, (40,40,40), (x, y, W, H), border_radius=6)
-        draw_text(x+12, y+8, "Enter custom gravity (m/s²) and press Enter:", small)
-        txt_surf = big.render(gravity_input_text if gravity_input_text else "", True, (220,220,220))
-        screen.blit(txt_surf, (x+12, y+32))
+    # ---------------- Settings Menu Overlay ----------------
+    # Always draw gear icon
+    pygame.draw.rect(screen, (80, 80, 80), GEAR_RECT, border_radius=8)
+    pygame.draw.circle(screen, (200, 200, 200), GEAR_RECT.center, 10, 3)
+    for i in range(8):
+        angle = math.radians(i * 45)
+        px1 = GEAR_RECT.centerx + int(math.cos(angle) * 10)
+        py1 = GEAR_RECT.centery + int(math.sin(angle) * 10)
+        px2 = GEAR_RECT.centerx + int(math.cos(angle) * 14)
+        py2 = GEAR_RECT.centery + int(math.sin(angle) * 14)
+        pygame.draw.line(screen, (200, 200, 200), (px1, py1), (px2, py2), 4)
 
-    if ball_size_edit:
-        W, H = 300, 64
-        x = (WIDTH - W)//2; y = (HEIGHT - H)//2
-        pygame.draw.rect(screen, (230,230,230), (x-4, y-4, W+8, H+8), border_radius=8)
-        pygame.draw.rect(screen, (40,40,40), (x, y, W, H), border_radius=6)
-        draw_text(x+12, y+8, "Enter ball radius (m) and press Enter:", small)
-        txt_surf = big.render(ball_size_text if ball_size_text else "", True, (220,220,220))
-        screen.blit(txt_surf, (x+12, y+32))
+    if settings_menu_open:
+        # Darken screen
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        screen.blit(overlay, (0, 0))
 
-    if color_modal_visible:
-        W, H = 420, 240
-        x = (WIDTH - W)//2; y = (HEIGHT - H)//2
-        pygame.draw.rect(screen, (230,230,230), (x-4, y-4, W+8, H+8), border_radius=8)
-        pygame.draw.rect(screen, (40,40,40), (x, y, W, H), border_radius=6)
-        screen.blit(big.render("Ball Color & Style", True, (230,230,230)), (x+16, y+12))
-        ox = x+18; oy = y+52
-        for i, c in enumerate(COLOR_PRESETS):
-            rect = pygame.Rect(ox + (i%6)*(36+12), oy + (i//6)*(36+12), 36, 36)
-            pygame.draw.rect(screen, c, rect, border_radius=6)
-            pygame.draw.rect(screen, (200,200,200), rect, 2, border_radius=6)
+        # Menu Background
+        pygame.draw.rect(screen, (40, 40, 40), MENU_RECT, border_radius=12)
+        pygame.draw.rect(screen, (200, 200, 200), MENU_RECT, 2, border_radius=12)
+        draw_text(MENU_RECT.x + 20, MENU_RECT.y + 20, "SETTINGS", big)
 
-    if help_visible:
-        W, H = 540, 320
-        x = (WIDTH - W)//2; y = (HEIGHT - H)//2
-        pygame.draw.rect(screen, (230,230,230), (x-6, y-6, W+12, H+12), border_radius=10)
-        pygame.draw.rect(screen, (20,20,20), (x, y, W, H), border_radius=8)
-        lines = [
-            "Controls:",
-            "- Left click + drag on anchor: pull and release to shoot.",
-            "- Left click outside anchor: move anchor (clamped to ground).",
-            "- Right click + drag: pan camera horizontally.",
-            "- Mouse wheel: zoom (centered on mouse).",
-            "- [ and ]: decrease / increase restitution (bounciness).",
-            "- C: clear recorded landings.",
-            "- D: toggle air drag.",
-            "Toggles:",
-            f"- Air drag (Cd): {'on' if ENABLE_AIR_DRAG else 'off'} (toggle with D).",
-            "Notes:",
-            "- Force shown is k * displacement. Use PULL_SCALE to reduce strength.",
-            "- Restitution reduces vertical velocity on bounce; lower values make bounces smaller.",
-            "- REST_SPEED_THRESHOLD controls when the simulation stops bouncing.",
-            "Press Esc to close this help."
-        ]
-        oy = y + 12
-        for line in lines:
-            draw_text(x+16, oy, line, small)
-            oy += 20
+        # Gravity presets
+        draw_text(MENU_RECT.x + 20, MENU_RECT.y + 60, f"Gravity (m/s²): {GRAVITY:.2f}", small)
+        for name, val, rect in preset_rects:
+            pygame.draw.rect(screen, (80,80,80), rect, border_radius=6)
+            screen.blit(small.render(name, True, (220,220,220)), (rect.x+8, rect.y+6))
+            if val is not None and abs(GRAVITY - val) < 1e-4:
+                pygame.draw.rect(screen, (120,180,120), rect, 3, border_radius=6)
+            elif name == "Custom" and (not any(abs(GRAVITY - v) < 1e-4 for (_, v, _) in preset_rects if v is not None)):
+                pygame.draw.rect(screen, (120,180,120), rect, 3, border_radius=6)
+        
+        # Restitution
+        pygame.draw.rect(screen, (70,70,70), REST_BOX, border_radius=6)
+        draw_text(REST_BOX.x+8, REST_BOX.y+6, f"Restitution (Bounciness): {RESTITUTION:.2f}", small)
+
+        # Ball Size
+        pygame.draw.rect(screen, (100,100,100), BALL_MINUS_RECT, border_radius=6)
+        pygame.draw.rect(screen, (100,100,100), BALL_PLUS_RECT, border_radius=6)
+        pygame.draw.rect(screen, (60,60,60), BALL_SIZE_RECT, border_radius=6)
+        screen.blit(big.render("-", True, (220,220,220)), (BALL_MINUS_RECT.x+10, BALL_MINUS_RECT.y+6))
+        screen.blit(big.render("+", True, (220,220,220)), (BALL_PLUS_RECT.x+6, BALL_PLUS_RECT.y+6))
+        screen.blit(small.render(f"Ball r: {BALL_RADIUS_M:.3f} m", True, (220,220,220)), (BALL_SIZE_RECT.x+8, BALL_SIZE_RECT.y+8))
+
+        # Toggles and Actions
+        pygame.draw.rect(screen, (150, 60, 60), CLEAR_SHOTS_RECT, border_radius=6)
+        draw_text(CLEAR_SHOTS_RECT.x+8, CLEAR_SHOTS_RECT.y+8, "Clear All Shots", small)
+
+        pygame.draw.rect(screen, (70, 70, 70), TOGGLE_DRAG_RECT, border_radius=6)
+        draw_text(TOGGLE_DRAG_RECT.x+8, TOGGLE_DRAG_RECT.y+8, f"Air Drag: {'ON' if ENABLE_AIR_DRAG else 'OFF'}", small)
+
+        pygame.draw.rect(screen, (70, 70, 70), TOGGLE_GRID_RECT, border_radius=6)
+        draw_text(TOGGLE_GRID_RECT.x+8, TOGGLE_GRID_RECT.y+8, f"Math Grid: {'ON' if draw_grid_enabled else 'OFF'}", small)
+
+        # Modals inside Settings Menu
+        if gravity_custom_modal:
+            pygame.draw.rect(screen, (20,20,20), (MENU_X+50, MENU_Y+200, 400, 64), border_radius=6)
+            draw_text(MENU_X+62, MENU_Y+208, "Enter custom gravity (m/s²) and press Enter:", small)
+            screen.blit(big.render(gravity_input_text, True, (220,220,220)), (MENU_X+62, MENU_Y+232))
+
+        if ball_size_edit:
+            pygame.draw.rect(screen, (20,20,20), (MENU_X+50, MENU_Y+200, 400, 64), border_radius=6)
+            draw_text(MENU_X+62, MENU_Y+208, "Enter ball radius (m) and press Enter:", small)
+            screen.blit(big.render(ball_size_text, True, (220,220,220)), (MENU_X+62, MENU_Y+232))
+
+        draw_text(MENU_RECT.x + 20, MENU_RECT.y + MENU_H - 30, "Press ESC or click gear to close menu.", small, (150, 150, 150))
 
     draw_text(WIDTH - 220, HEIGHT - 30, f"Zoom: {PIXELS_PER_M:.1f} px/m", small)
 
